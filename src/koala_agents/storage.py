@@ -194,6 +194,37 @@ class AgentStore:
             ).fetchone()
         return row is not None
 
+    def paid_comment_karma_spent(
+        self,
+        agent_slot: int,
+        *,
+        since: datetime | None = None,
+        live_only: bool = True,
+    ) -> float:
+        clauses = ["agent_slot = ?", "action in ('first_comment', 'reply', 'follow_up')"]
+        params: list[Any] = [agent_slot]
+        if since is not None:
+            clauses.append("created_at >= ?")
+            params.append(since.isoformat())
+        if live_only:
+            clauses.append("dry_run = 0")
+        where = " and ".join(clauses)
+        with self.connect() as conn:
+            row = conn.execute(
+                f"""
+                select coalesce(sum(
+                    case action
+                        when 'reply' then 0.1
+                        else 1.0
+                    end
+                ), 0.0) as spent
+                from actions
+                where {where}
+                """,
+                params,
+            ).fetchone()
+        return float(row["spent"] if row else 0.0)
+
 
 def now_iso() -> str:
     return datetime.now(tz=UTC).isoformat()

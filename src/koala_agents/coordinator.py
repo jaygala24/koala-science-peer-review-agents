@@ -24,7 +24,8 @@ class Coordinator:
     def __init__(self, config: AppConfig) -> None:
         self.config = config
         self.store = AgentStore(config.db_path)
-        self.logger = TransparencyLogger(config.logs_dir, config.github_repo_url, config.github_branch)
+        transparency_dir = config.logs_dir / "dry_run_public" if config.dry_run else config.public_logs_dir
+        self.logger = TransparencyLogger(transparency_dir, config.github_repo_url, config.github_branch)
         self.trajectory = TrajectoryLogger(config.logs_dir)
         self.memory = MemoryStore(config.memory_db_path, config.logs_dir)
         self.retrieval = RetrievalBroker(config.semantic_scholar_api_key)
@@ -41,6 +42,10 @@ class Coordinator:
             self.sibling_actor_ids,
             exhaustive=config.exhaustive_mode,
             max_roles=config.max_internal_roles,
+            enable_dynamic_pacing=config.enable_dynamic_pacing,
+            max_comment_karma_per_agent_per_day=config.max_comment_karma_per_agent_per_day,
+            comment_karma_budget_per_agent=config.comment_karma_budget_per_agent,
+            pacing_lookback_hours=config.pacing_lookback_hours,
         )
 
     def refresh_agents(self, agents: list[PublicAgent]) -> list[PublicAgent]:
@@ -76,12 +81,19 @@ class Coordinator:
             "enable_retrieval_for_all_agents": self.config.enable_retrieval_for_all_agents,
             "enable_model_tool_calls": self.config.enable_model_tool_calls,
             "max_tool_call_rounds": self.config.max_tool_call_rounds,
+            "enable_dynamic_pacing": self.config.enable_dynamic_pacing,
+            "max_comment_karma_per_agent_per_day": self.config.max_comment_karma_per_agent_per_day,
+            "comment_karma_budget_per_agent": self.config.comment_karma_budget_per_agent,
+            "pacing_lookback_hours": self.config.pacing_lookback_hours,
             "min_verdict_citations": self.config.min_verdict_citations,
             "bayesian_discussion_updates": self.config.bayesian_discussion_updates,
             "max_discussion_update_weight": self.config.max_discussion_update_weight,
             "use_gemini_in_dry_run": self.config.use_gemini_in_dry_run,
             "loop_interval_seconds": self.config.loop_interval_seconds,
             "memory_db_path": str(self.config.memory_db_path),
+            "logs_dir": str(self.config.logs_dir),
+            "public_logs_dir": str(self.config.public_logs_dir),
+            "active_transparency_logs_dir": str(self.logger.logs_dir),
             "agents": [
                 {
                     "slot": agent.slot,
@@ -92,6 +104,7 @@ class Coordinator:
                     "karma": agent.karma,
                     "strike_count": agent.strike_count,
                     "min_karma_reserve": agent.min_karma_reserve,
+                    "live_comment_karma_spent": self.store.paid_comment_karma_spent(agent.slot, live_only=True),
                 }
                 for agent in self.agents
             ],
@@ -275,7 +288,7 @@ class Coordinator:
             "discussion_signals": extract_discussion_signals(comments, self.sibling_actor_ids),
             "dry_run": self.config.dry_run,
         }
-        _, github_url = self.logger.write_log(
+        local_path, github_url = self.logger.write_log(
             kind=decision.action,
             agent=decision.agent,
             paper=decision.paper,
@@ -290,6 +303,9 @@ class Coordinator:
             return self.result_payload(decision, response, content)
 
         self.require_live_ready(decision.agent, github_url)
+        publish_result = self.publish_public_log(
+            decision.agent, decision.paper, decision.action, local_path
+        )
         response = KoalaClient(self.config.koala_api_base, decision.agent).post_comment(
             decision.paper.id,
             content,
@@ -305,7 +321,7 @@ class Coordinator:
             github_file_url=github_url,
             parent_comment_id=decision.parent_comment_id,
         )
-        self.store.record_decision(decision, dry_run=False, response=response)
+        self.store.record_decision(decision, dry_run=False, response={"koala": response, "log_publish": publish_result})
         self.record_action_memory(decision, response, update, role_results, retrieval_results, comments)
         return self.result_payload(decision, response, content)
 
@@ -349,7 +365,7 @@ class Coordinator:
             f"Discussion update: {update.rationale}\n\n"
             f"Rationale:\n{verdict_rationale([*role_results, *discussion_role_results])}"
         )
-        _, github_url = self.logger.write_log(
+        local_path, github_url = self.logger.write_log(
             kind="verdict",
             agent=agent,
             paper=paper,
@@ -376,6 +392,7 @@ class Coordinator:
                 "github_file_url": github_url,
             }
         self.require_live_ready(agent, github_url)
+        self.publish_public_log(agent, paper, "verdict", local_path)
         response = KoalaClient(self.config.koala_api_base, agent).post_verdict(
             paper.id, content, score, github_url
         )
@@ -388,6 +405,25 @@ class Coordinator:
         )
         self.record_verdict_memory(agent, paper, score, update, role_results, comments, retrieval_results)
         return {"agent": agent.name, "paper_id": paper.id, "action": "verdict", "response": response}
+
+    def publish_public_log(
+        self,
+        agent: PublicAgent,
+        paper: Paper,
+        kind: str,
+        local_path,
+    ) -> dict[str, Any]:
+        result = self.logger.publish_log(
+            local_path,
+            message=f"Add {kind} transparency log for {paper.id}",
+        )
+        self.trajectory.record(
+            agent=agent,
+            event="public_log_publish",
+            paper=paper,
+            payload={"kind": kind, **result},
+        )
+        return result
 
     def retrieve(self, paper: Paper, agent: PublicAgent) -> list[RetrievalResult]:
         queries = retrieval_queries_for(paper, agent.public_role)

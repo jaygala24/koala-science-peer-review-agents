@@ -49,6 +49,7 @@ class AppConfig:
     db_path: Path
     memory_db_path: Path
     logs_dir: Path
+    public_logs_dir: Path
     dry_run: bool
     exhaustive_mode: bool
     max_internal_roles: int
@@ -58,6 +59,10 @@ class AppConfig:
     use_gemini_in_dry_run: bool
     enable_model_tool_calls: bool
     max_tool_call_rounds: int
+    enable_dynamic_pacing: bool
+    max_comment_karma_per_agent_per_day: float
+    comment_karma_budget_per_agent: float
+    pacing_lookback_hours: float
     bayesian_discussion_updates: bool
     max_discussion_update_weight: float
     loop_interval_seconds: int
@@ -68,9 +73,9 @@ class AppConfig:
         load_env_file(env_path)
         agents: list[PublicAgent] = []
         defaults = {
-            1: ("EvidenceRigorAgent", "evidence_rigor", 15.0),
-            2: ("LiteratureNoveltyAgent", "literature_novelty", 15.0),
-            3: ("MetaCalibrationAgent", "meta_calibration", 20.0),
+            1: ("EvidenceRigorAgent", "evidence_rigor", 35.0),
+            2: ("LiteratureNoveltyAgent", "literature_novelty", 35.0),
+            3: ("MetaCalibrationAgent", "meta_calibration", 40.0),
         }
         for slot, (default_name, default_role, default_reserve) in defaults.items():
             agents.append(
@@ -97,6 +102,7 @@ class AppConfig:
             db_path=Path(os.environ.get("DB_PATH", "data/koala_agents.sqlite3")),
             memory_db_path=Path(os.environ.get("MEMORY_DB_PATH", "data/memory.sqlite3")),
             logs_dir=Path(os.environ.get("LOGS_DIR", "logs")),
+            public_logs_dir=Path(os.environ.get("PUBLIC_LOGS_DIR", "public_logs")),
             dry_run=env_bool("DRY_RUN", True),
             exhaustive_mode=env_bool("EXHAUSTIVE_MODE", True),
             max_internal_roles=int(env_float("MAX_INTERNAL_ROLES", 12.0)),
@@ -106,6 +112,10 @@ class AppConfig:
             use_gemini_in_dry_run=env_bool("USE_GEMINI_IN_DRY_RUN", True),
             enable_model_tool_calls=env_bool("ENABLE_MODEL_TOOL_CALLS", True),
             max_tool_call_rounds=int(env_float("MAX_TOOL_CALL_ROUNDS", 2.0)),
+            enable_dynamic_pacing=env_bool("ENABLE_DYNAMIC_PACING", True),
+            max_comment_karma_per_agent_per_day=env_float("MAX_COMMENT_KARMA_PER_AGENT_PER_DAY", 8.0),
+            comment_karma_budget_per_agent=env_float("COMMENT_KARMA_BUDGET_PER_AGENT", 55.0),
+            pacing_lookback_hours=env_float("PACING_LOOKBACK_HOURS", 24.0),
             bayesian_discussion_updates=env_bool("BAYESIAN_DISCUSSION_UPDATES", True),
             max_discussion_update_weight=env_float("MAX_DISCUSSION_UPDATE_WEIGHT", 0.35),
             loop_interval_seconds=int(env_float("LOOP_INTERVAL_SECONDS", 300.0)),

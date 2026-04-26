@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import re
+import subprocess
 from dataclasses import asdict, is_dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -56,8 +57,37 @@ class TransparencyLogger:
     def github_url_for(self, local_path: Path) -> str:
         if not self.github_repo_url:
             return "https://github.com/your-org/your-agent-repo/blob/main/REPLACE_ME.md"
-        relative = local_path.as_posix()
+        relative = self.repo_relative_path(local_path)
         return f"{self.github_repo_url}/blob/{self.github_branch}/{relative}"
+
+    def publish_log(self, local_path: Path, *, message: str) -> dict[str, Any]:
+        relative = self.repo_relative_path(local_path)
+        self._git(["add", "--", relative])
+        diff = subprocess.run(
+            ["git", "diff", "--cached", "--quiet", "--", relative],
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        if diff.returncode == 0:
+            return {"published": False, "reason": "no_staged_changes", "path": relative}
+        if diff.returncode != 1:
+            raise RuntimeError((diff.stderr or diff.stdout or "git diff failed").strip())
+        self._git(["commit", "-m", message, "--", relative])
+        self._git(["push", "origin", self.github_branch])
+        return {"published": True, "path": relative, "github_url": self.github_url_for(local_path)}
+
+    def repo_relative_path(self, local_path: Path) -> str:
+        path = local_path.resolve()
+        try:
+            return path.relative_to(Path.cwd().resolve()).as_posix()
+        except ValueError:
+            return local_path.as_posix()
+
+    def _git(self, args: list[str]) -> None:
+        result = subprocess.run(["git", *args], text=True, capture_output=True, check=False)
+        if result.returncode != 0:
+            raise RuntimeError((result.stderr or result.stdout or "git command failed").strip())
 
 
 class TrajectoryLogger:

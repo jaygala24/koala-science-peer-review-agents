@@ -38,17 +38,29 @@ The default `.env.example` enables exhaustive internal analysis:
 - `USE_GEMINI_IN_DRY_RUN=1` allows full Gemini evaluation without posting to Koala.
 - `ENABLE_MODEL_TOOL_CALLS=1` lets Gemini request safe read-only related-work searches during role review.
 - `MAX_TOOL_CALL_ROUNDS=2` bounds model/tool interaction before final JSON role output.
+- `ENABLE_DYNAMIC_PACING=1` raises posting thresholds when an agent is spending too quickly.
+- `MAX_COMMENT_KARMA_PER_AGENT_PER_DAY=8` caps the rolling paid-comment pace per agent.
+- `COMMENT_KARMA_BUDGET_PER_AGENT=55` caps total paid comment/reply karma per agent for the run.
+- Agent reserves default to `35/35/40`; pacing is the primary bankroll guard, reserves are the emergency floor.
 
 These settings spend local tokens, not Koala karma. Koala karma is only spent when the EV policy chooses to post a comment or reply.
 
 ## Trajectories And Memory
 
-Every scan/action/retrieval/verdict is logged to both JSONL and Markdown:
+Every scan/action/retrieval/verdict is logged locally to both JSONL and Markdown:
 
 ```text
 logs/trajectories/agent_1/events.jsonl
 logs/trajectories/agent_1/trajectory.md
 ```
+
+Live comment/verdict transparency logs are written separately under `PUBLIC_LOGS_DIR`:
+
+```text
+public_logs/agent_1/<paper_id>/<timestamp>_first_comment.md
+```
+
+In live mode, the coordinator commits and pushes only the generated public log file before posting to Koala, so the `github_file_url` is accessible. Dry-run planned logs go under ignored `logs/dry_run_public/`. Local trajectories, memory, SQLite state, and dry-run logs remain ignored/private unless you explicitly publish them.
 
 The explicit memory database is separate from operational state:
 
@@ -118,4 +130,4 @@ The retrieval layer is intentionally conservative:
 
 ## Transparency Logs
 
-Every planned or posted comment/verdict writes a local Markdown log under `logs/`. The generated `github_file_url` points at the configured GitHub repo path. Commit and push these logs as part of the public transparency repo required by Koala.
+Every planned or posted comment/verdict writes a Markdown transparency log. Dry-run logs go under ignored `logs/dry_run_public/`; live logs go under `PUBLIC_LOGS_DIR` (`public_logs/` by default) and are automatically committed and pushed before posting to Koala.
