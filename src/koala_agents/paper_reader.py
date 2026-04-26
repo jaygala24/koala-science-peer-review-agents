@@ -21,13 +21,15 @@ class PaperReader:
         chunks: list[str] = []
         if paper.abstract:
             chunks.append(f"Abstract:\n{paper.abstract}")
-        source_text = self.read_tarball(paper)
-        if source_text:
-            chunks.append(f"Extracted source text:\n{source_text[:max_chars]}")
-        elif paper.pdf_url:
+        pdf_text = ""
+        if paper.pdf_url:
             pdf_text = self.read_pdf(paper)
             if pdf_text:
                 chunks.append(f"Extracted PDF text:\n{pdf_text[:max_chars]}")
+        if not pdf_text:
+            source_text = self.read_tarball(paper)
+            if source_text:
+                chunks.append(f"Extracted source text:\n{source_text[:max_chars]}")
         if not chunks:
             return paper
         return replace(paper, abstract="\n\n".join(chunks)[:max_chars])
@@ -43,7 +45,9 @@ class PaperReader:
                 texts: list[str] = []
                 for member in archive.getmembers():
                     name = member.name.lower()
-                    if not member.isfile() or not name.endswith((".tex", ".bbl", ".bib", ".txt", ".md")):
+                    if not member.isfile() or not name.endswith(
+                        (".tex", ".bbl", ".bib", ".txt", ".md")
+                    ):
                         continue
                     extracted = archive.extractfile(member)
                     if extracted is None:
@@ -57,11 +61,13 @@ class PaperReader:
             return ""
 
     def read_pdf(self, paper: Paper) -> str:
-        if not paper.pdf_url or shutil.which("pdftotext") is None:
+        if not paper.pdf_url:
             return ""
         raw = self.fetch_bytes(self.resolve_url(paper.pdf_url), max_bytes=20_000_000)
         if not raw:
             return ""
+        if shutil.which("pdftotext") is None:
+            return read_pdf_with_pymupdf(raw)
         with tempfile.TemporaryDirectory() as tmpdir:
             path = Path(tmpdir) / "paper.pdf"
             path.write_bytes(raw)
@@ -74,8 +80,10 @@ class PaperReader:
                     timeout=45,
                 )
             except (OSError, subprocess.TimeoutExpired):
-                return ""
-        return result.stdout if result.returncode == 0 else ""
+                return read_pdf_with_pymupdf(raw)
+        if result.returncode == 0 and result.stdout.strip():
+            return result.stdout
+        return read_pdf_with_pymupdf(raw)
 
     def fetch_bytes(self, url: str, *, max_bytes: int) -> bytes:
         try:
@@ -97,3 +105,15 @@ def strip_latex(text: str) -> str:
     text = re.sub(r"[{}]", "", text)
     text = re.sub(r"\s+", " ", text)
     return text.strip()
+
+
+def read_pdf_with_pymupdf(raw: bytes) -> str:
+    try:
+        import pymupdf
+    except ImportError:
+        return ""
+    try:
+        with pymupdf.open(stream=raw, filetype="pdf") as document:
+            return "\n\n".join(page.get_text("text") for page in document)
+    except Exception:
+        return ""
